@@ -2,6 +2,11 @@
 
 Native Swift access to the undocumented IMU and related sensors on Apple Silicon Macs.
 
+This repository started as a Swift port of the original Python project:
+[olvvier/apple-silicon-accelerometer](https://github.com/olvvier/apple-silicon-accelerometer).
+
+The current codebase is now Swift-only, but the initial implementation and hardware reverse-engineering work came from that Python version.
+
 This repo reads the Apple SPU HID sensors exposed through `AppleSPUHIDDevice`, including:
 
 - accelerometer
@@ -18,17 +23,17 @@ It also includes two Swift executables:
 
 ## project layout
 
-- `swift-port/Package.swift` - Swift Package manifest
-- `swift-port/Sources/MacIMU/` - reusable library target
-- `swift-port/Sources/macimu-cli/` - simple CLI executable
-- `swift-port/Sources/macimu-motion-live/` - terminal dashboard executable
+- `Package.swift` - Swift Package manifest
+- `Sources/MacIMU/` - reusable library target
+- `Sources/macimu-cli/` - simple CLI executable
+- `Sources/macimu-motion-live/` - terminal dashboard executable
 - `KBPulse/` - vendored keyboard backlight helper
 
 ## quick start
 
 ```bash
 git clone git@github.com:junwatu/macimu.git
-cd macimu/swift-port
+cd macimu
 swift build -c release
 ```
 
@@ -49,14 +54,12 @@ sudo .build/release/macimu-motion-live
 Debug build:
 
 ```bash
-cd swift-port
 swift build
 ```
 
 Run with SwiftPM:
 
 ```bash
-cd swift-port
 sudo swift run macimu-cli --duration 10
 sudo swift run macimu-motion-live
 ```
@@ -64,7 +67,6 @@ sudo swift run macimu-motion-live
 Useful flags:
 
 ```bash
-cd swift-port
 sudo swift run macimu-cli --sample-rate 200
 sudo swift run macimu-cli --als --lid
 sudo swift run macimu-cli --no-orientation
@@ -77,8 +79,8 @@ sudo swift run macimu-motion-live --kbpulse-bin /path/to/KBPulse
 
 Release binaries are written to:
 
-- `swift-port/.build/release/macimu-cli`
-- `swift-port/.build/release/macimu-motion-live`
+- `.build/release/macimu-cli`
+- `.build/release/macimu-motion-live`
 
 ## library example
 
