@@ -1,398 +1,155 @@
-# apple-silicon-accelerometer
+# macimu
 
-more information: [read the article on Medium](https://medium.com/@oli.bourbonnais/your-macbook-has-an-accelerometer-and-you-can-read-it-in-real-time-in-python-28d9395fb180)
+Native Swift access to the undocumented IMU and related sensors on Apple Silicon Macs.
 
-it turns out modern macbook pros have an undocumented mems accelerometer + gyroscope managed by the sensor processing unit (spu).
-this project reads both via iokit hid, along with lid angle and ambient light sensors from the same interface
+This repo reads the Apple SPU HID sensors exposed through `AppleSPUHIDDevice`, including:
+
+- accelerometer
+- gyroscope
+- lid angle
+- ambient light
+
+It also includes two Swift executables:
+
+- `macimu-cli` for simple live sensor output
+- `macimu-motion-live` for the full terminal dashboard with waveform, orientation, heartbeat estimation, events, and optional KBPulse integration
 
 ![demo](https://raw.githubusercontent.com/olvvier/apple-silicon-accelerometer/main/assets/demo.gif)
 
+## project layout
+
+- `swift-port/Package.swift` - Swift Package manifest
+- `swift-port/Sources/MacIMU/` - reusable library target
+- `swift-port/Sources/macimu-cli/` - simple CLI executable
+- `swift-port/Sources/macimu-motion-live/` - terminal dashboard executable
+- `KBPulse/` - vendored keyboard backlight helper
+
 ## quick start
 
-### python dashboard
+```bash
+git clone git@github.com:junwatu/macimu.git
+cd macimu/swift-port
+swift build -c release
+```
 
-    git clone https://github.com/olvvier/apple-silicon-accelerometer
-    cd apple-silicon-accelerometer
-    python3 -m venv .venv && source .venv/bin/activate
-    pip install -e .[demo]
-    sudo .venv/bin/python3 motion_live.py
+Run the simple CLI:
 
-### swift cli
+```bash
+sudo .build/release/macimu-cli --duration 10
+```
 
-    git clone https://github.com/olvvier/apple-silicon-accelerometer
-    cd apple-silicon-accelerometer
-    cd swift-port
-    swift build -c release
-    sudo .build/release/macimu-cli --duration 10
+Run the terminal dashboard:
 
-### swift live dashboard
+```bash
+sudo .build/release/macimu-motion-live
+```
 
-    git clone https://github.com/olvvier/apple-silicon-accelerometer
-    cd apple-silicon-accelerometer
-    cd swift-port
-    swift build -c release
-    sudo .build/release/macimu-motion-live
+## development
 
-## what is this
+Debug build:
 
-apple silicon chips (M2/M3/M4/M5) have a hard to find mems IMU (accelerometer + gyroscope) managed by the sensor processing unit (SPU).
-it's not exposed through any public api or framework.
-this project reads raw 3-axis acceleration and angular velocity data at ~800hz via iokit hid callbacks.
+```bash
+cd swift-port
+swift build
+```
 
-only tested on macbook pro m3 pro so far - might work on other apple silicon macs but no guarantees
+Run with SwiftPM:
+
+```bash
+cd swift-port
+sudo swift run macimu-cli --duration 10
+sudo swift run macimu-motion-live
+```
+
+Useful flags:
+
+```bash
+cd swift-port
+sudo swift run macimu-cli --sample-rate 200
+sudo swift run macimu-cli --als --lid
+sudo swift run macimu-cli --no-orientation
+
+sudo swift run macimu-motion-live --duration 20
+sudo swift run macimu-motion-live --sample-rate 100
+sudo swift run macimu-motion-live --no-kbpulse
+sudo swift run macimu-motion-live --kbpulse-bin /path/to/KBPulse
+```
+
+Release binaries are written to:
+
+- `swift-port/.build/release/macimu-cli`
+- `swift-port/.build/release/macimu-motion-live`
+
+## library example
+
+```swift
+import MacIMU
+
+let imu = IMU(accel: true, gyro: true, orientation: true, sampleRate: 100)
+try imu.start()
+defer { imu.stop() }
+
+if let accel = imu.latestAccel() {
+    print(accel.x, accel.y, accel.z)
+}
+
+if let gyro = imu.latestGyro() {
+    print(gyro.x, gyro.y, gyro.z)
+}
+
+if let orientation = imu.orientation() {
+    print(orientation.roll, orientation.pitch, orientation.yaw)
+}
+```
 
 ## how it works
 
-the sensor lives under AppleSPUHIDDevice in the iokit registry, on vendor usage page 0xFF00.
-usage 3 is the accelerometer, usage 9 is the gyroscope (same physical IMU, believed to be Bosch BMI286 based on teardowns).
-the driver is AppleSPUHIDDriver which is part of the sensor processing unit.
-we open it with IOHIDDeviceCreate and register an asynchronous callback via IOHIDDeviceRegisterInputReportCallback.
-data comes as 22-byte hid reports with x/y/z as int32 little-endian at byte offsets 6, 10, 14.
-divide by 65536 to get the value in g (accel) or deg/s (gyro).
-callback rate is ~100hz (decimated from ~800hz native)
+The sensor path is under `AppleSPUHIDDevice` in the IOKit registry on vendor usage page `0xFF00`.
 
-orientation is computed by fusing accel + gyro with a Mahony AHRS quaternion filter and displayed as roll/pitch/yaw gauges
+- usage `3` is the accelerometer
+- usage `9` is the gyroscope
+- usage `4` is ambient light
+- usage page `0x0020`, usage `138` is lid angle
 
-you can verify the device exists on your machine with:
+The Swift implementation opens the HID devices directly with IOKit, registers async input report callbacks, parses the raw reports, and exposes higher-level sample/orientation APIs in `MacIMU`.
 
-    ioreg -l -w0 | grep -A5 AppleSPUHIDDevice
+Orientation is computed with a Mahony AHRS filter.
 
-## install (beta API)
+## requirements
 
-    pip install macimu
+- Apple Silicon Mac with SPU HID sensors
+- macOS
+- Swift 6
+- `sudo` to access the HID devices
 
-if you get `externally-managed-environment` (homebrew python), use a venv:
+Check whether the device exists:
 
-    python3 -m venv .venv && source .venv/bin/activate && pip install macimu
-
-```python
-from macimu import IMU
-
-if __name__ == '__main__':
-    with IMU() as imu:
-        accel = imu.latest_accel()       # Sample(x, y, z) in g
-        gyro = imu.latest_gyro()         # Sample(x, y, z) in deg/s
-
-        for s in imu.read_accel():       # all new samples since last call
-            print(s.x, s.y, s.z)
+```bash
+ioreg -l -w0 | grep -A5 AppleSPUHIDDevice
 ```
 
-requires root (sudo) because iokit hid device access needs elevated privileges.
-note: accelerometer reads ~1g at rest (gravity). use `macimu.filters.remove_gravity()` to isolate dynamic acceleration.
+## KBPulse
 
-### check if sensor exists (no root needed)
+`macimu-motion-live` can drive the keyboard backlight from vibration intensity through the bundled `KBPulse` helper.
 
-```python
-from macimu import IMU
-print(IMU.available())   # True on macbook pro m2+
-```
+The dashboard will try these in order:
 
-### real-time orientation (roll / pitch / yaw)
-
-fuses accel + gyro with a mahony quaternion filter, no math needed on your side
-
-```python
-from macimu import IMU
-
-if __name__ == '__main__':
-    with IMU(orientation=True) as imu:
-        o = imu.orientation()
-        print(f"{o.roll:.1f}° {o.pitch:.1f}° {o.yaw:.1f}°")
-        print(o.qw, o.qx, o.qy, o.qz)  # raw quaternion
-```
-
-### timestamped samples (hardware timestamps from iokit)
-
-each sample includes a precise timestamp from the hid report (mach_absolute_time),
-not a python-side clock. every report gets its own unique timestamp.
-
-```python
-from macimu import IMU
-
-if __name__ == '__main__':
-    with IMU() as imu:
-        for s in imu.read_accel_timed():
-            print(f"t={s.t:.6f}  x={s.x:.3f}  y={s.y:.3f}  z={s.z:.3f}")
-```
-
-### streaming with callback
-
-```python
-import time
-from macimu import IMU
-
-def on_sample(s):
-    print(s.x, s.y, s.z)
-
-if __name__ == '__main__':
-    with IMU() as imu:
-        stop = imu.on_accel(on_sample)  # background thread
-        time.sleep(10)
-        stop()                          # unregister
-```
-
-### sample rate control
-
-```python
-IMU(sample_rate=200)  # ~200 hz (preferred way)
-IMU(sample_rate=50)   # ~50 hz
-IMU(decimation=1)     # ~800 hz (full native rate)
-IMU(decimation=8)     # ~100 hz (default)
-```
-
-### signal processing (zero-dependency biquad butterworth filters)
-
-```python
-from macimu import IMU
-from macimu.filters import magnitude, remove_gravity, high_pass, low_pass, peak_detect
-
-if __name__ == '__main__':
-    with IMU() as imu:
-        samples = imu.read_accel()
-        m = magnitude(samples[0].x, samples[0].y, samples[0].z)
-        dynamic = remove_gravity(samples)               # kalman filter gravity removal
-        smooth = low_pass(samples, 5.0, 100.0)          # 2nd-order butterworth
-        taps = high_pass(samples, 10.0, 100.0, order=4) # 4th-order, -24 dB/oct
-        mags = [magnitude(s.x, s.y, s.z) for s in samples]
-        hits = peak_detect(mags, threshold=1.2)          # detect impacts
-```
-
-### mock mode (no root needed, for development / testing)
-
-```python
-from macimu import IMU
-
-imu = IMU.mock(duration=10.0, rate=100)  # synthetic sinusoidal data
-for s in imu.stream_accel():
-    print(s)
-```
-
-### record and replay
-
-```python
-from macimu import IMU
-
-if __name__ == '__main__':
-    # record
-    with IMU() as imu:
-        imu.record_to("session.csv")
-        time.sleep(10)
-
-    # replay (no root needed)
-    imu = IMU.from_recording("session.csv")
-    for s in imu.stream_accel_timed():
-        print(s)
-```
-
-### api reference
-
-**constructor**
-
-    IMU(accel=True, gyro=True, als=False, lid=False, orientation=False, decimation=8, sample_rate=None)
-
-**class methods** (no root needed)
-
-| method | returns | description |
-|--------|---------|-------------|
-| `IMU.available()` | `bool` | check if sensor exists |
-| `IMU.device_info()` | `dict` | sensors list, serial, product name |
-| `IMU.mock(duration, rate, noise)` | `IMU` | synthetic data for testing |
-| `IMU.from_recording(path)` | `IMU` | replay from csv |
-
-**reading data**
-
-| method | returns | description |
-|--------|---------|-------------|
-| `imu.read_accel()` | `list[Sample]` | new samples since last call (x, y, z in g) |
-| `imu.read_gyro()` | `list[Sample]` | new samples since last call (x, y, z in deg/s) |
-| `imu.read_accel_timed()` | `list[TimedSample]` | with hardware timestamp (t, x, y, z) |
-| `imu.read_gyro_timed()` | `list[TimedSample]` | same for gyro |
-| `imu.latest_accel()` | `Sample \| None` | most recent sample |
-| `imu.latest_gyro()` | `Sample \| None` | most recent sample |
-| `imu.read_all()` | `dict` | latest from all enabled sensors |
-
-**orientation & sensors**
-
-| method | returns | description |
-|--------|---------|-------------|
-| `imu.orientation()` | `Orientation \| None` | roll, pitch, yaw (deg) + quaternion |
-| `imu.read_lid()` | `float \| None` | lid angle in degrees |
-| `imu.read_als()` | `ALSReading \| None` | lux + 4 spectral channels |
-
-**streaming**
-
-| method | returns | description |
-|--------|---------|-------------|
-| `imu.stream_accel()` | generator | blocking, yields `Sample` |
-| `imu.stream_gyro()` | generator | blocking, yields `Sample` |
-| `imu.stream_accel_timed()` | generator | blocking, yields `TimedSample` |
-| `imu.stream_gyro_timed()` | generator | blocking, yields `TimedSample` |
-| `imu.on_accel(callback)` | `stop_fn` | background thread, call `stop()` to end |
-| `imu.on_gyro(callback)` | `stop_fn` | background thread, call `stop()` to end |
-
-**lifecycle**
-
-| method / property | description |
-|-------------------|-------------|
-| `imu.start()` / `imu.stop()` | manual lifecycle (or use `with IMU() as imu:`) |
-| `imu.is_running` | `True` if worker is active |
-| `imu.effective_sample_rate` | measured hz (or `None` if not enough data) |
-| `imu.record_to(path)` | start writing samples to csv |
-
-**filters** (`from macimu.filters import ...`) -- biquad butterworth, zero external deps
-
-| function | description |
-|----------|-------------|
-| `magnitude(x, y, z)` | euclidean magnitude |
-| `remove_gravity(samples, Q, R)` | kalman filter gravity subtraction |
-| `GravityKalman(Q, R)` | real-time gravity estimator (stateful) |
-| `low_pass(samples, cutoff_hz, rate, order=2)` | butterworth low-pass (-12 dB/oct per order of 2) |
-| `high_pass(samples, cutoff_hz, rate, order=2)` | butterworth high-pass |
-| `bandpass(samples, low, high, rate, order=2)` | cascaded hp + lp |
-| `filtfilt_low_pass(samples, cutoff_hz, rate)` | zero-phase lp (no lag, offline only) |
-| `filtfilt_high_pass(samples, cutoff_hz, rate)` | zero-phase hp (no lag, offline only) |
-| `median_filter(samples, window=5)` | spike / outlier removal |
-| `peak_detect(values, threshold, min_spacing)` | find peaks in 1d signal |
-| `rolling_rms(samples, window)` | rolling root-mean-square of magnitude |
-
-**exceptions**: `macimu.SensorNotFound` if no SPU device, `PermissionError` if not root
-
-## demo dashboard
-
-    git clone https://github.com/olvvier/apple-silicon-accelerometer
-    cd apple-silicon-accelerometer
-    python3 -m venv .venv && source .venv/bin/activate
-    pip install -e .[demo]
-    sudo .venv/bin/python3 motion_live.py
-
-the demo includes vibration detection, orientation gauges, experimental heartbeat (bcg), lid angle, ambient light, and optional keyboard flash
-
-## swift package
-
-the repo now also includes a native swift port for apple silicon macs.
-it talks to `AppleSPUHIDDevice` directly through iokit hid instead of reproducing the python shared-memory worker design.
-the swift project lives in the `swift-port/` subfolder.
-
-build the swift targets with:
-
-    cd swift-port
-    swift build
-
-or build optimized binaries with:
-
-    cd swift-port
-    swift build -c release
-
-### swift cli
-
-simple live accel / gyro / orientation output:
-
-    cd swift-port
-    sudo swift run macimu-cli --duration 10
-
-release binary:
-
-    cd swift-port
-    sudo .build/release/macimu-cli --duration 10
-
-useful flags:
-
-    cd swift-port
-    sudo swift run macimu-cli --sample-rate 200
-    sudo swift run macimu-cli --als --lid
-    sudo swift run macimu-cli --no-orientation
-
-### swift motion dashboard
-
-full terminal dashboard port of `motion_live.py`:
-
-    cd swift-port
-    sudo swift run macimu-motion-live
-
-release binary:
-
-    cd swift-port
-    sudo .build/release/macimu-motion-live
-
-useful flags:
-
-    cd swift-port
-    sudo swift run macimu-motion-live --no-kbpulse
-    sudo swift run macimu-motion-live --duration 20
-    sudo swift run macimu-motion-live --sample-rate 100
-    sudo swift run macimu-motion-live --kbpulse-bin /path/to/KBPulse
-
-current swift coverage:
-
-- accel + gyro streaming from `AppleSPUHIDDevice`
-- ambient light + lid-angle parsing
-- Mahony AHRS orientation fusion
-- filter helpers (`magnitude`, `lowPass`, `highPass`, `bandPass`, `removeGravity`)
-- live terminal dashboard with waveform, axes, heartbeat, events, ALS, lid angle, and optional KBPulse output
-
-### keyboard flash mode (bundled KBPulse)
-
-`motion_live.py` can flash the keyboard backlight from vibration intensity in near realtime.
-the repo now vendors KBPulse, including a prebuilt apple silicon binary at `KBPulse/bin/KBPulse`.
-
-run as usual:
-
-    sudo python3 motion_live.py
-
-optional overrides:
-
-    sudo python3 motion_live.py --no-kbpulse
-    sudo python3 motion_live.py --kbpulse-bin /path/to/KBPulse
-
-### with uv
-
-If you have `uv`/`uvx` installed, you can also just
-
-    sudo uvx git+https://github.com/olvvier/apple-silicon-accelerometer.git
-
-## code structure
-
-- macimu/ - python package (`pip install macimu`): high-level IMU class + low-level iokit bindings, shared memory ring buffers
-- swift-port/Sources/MacIMU/ - native Swift port: macOS IOKit HID reader, orientation math, and filter helpers
-- swift-port/Sources/macimu-cli/ - Swift CLI for live accel/gyro/orientation output
-- swift-port/Sources/macimu-motion-live/ - Swift terminal dashboard port of `motion_live.py`
-- swift-port/Package.swift - Swift Package Manager manifest
-- motion_live.py - demo app: vibration detection, heartbeat bcg, terminal ui
-- KBPulse/ - vendored keyboard backlight driver code + binary (`KBPulse/bin/KBPulse`)
-
-## heartbeat demo
-
-place your wrists on the laptop near the trackpad and wait 10-20 seconds for the signal to stabilize.
-this uses ballistocardiography - the mechanical vibrations from your heartbeat transmitted through your arms into the chassis.
-experimental, not reliable, just a fun use-case to show what the sensor can pick up.
-the bcg bandpass is 0.8-3hz and bpm is estimated via autocorrelation on the filtered signal
+- `KBPULSE_BIN`
+- `KBPulse/bin/KBPulse`
+- common local build output paths
+- `KBPulse` on `PATH`
 
 ## notes
 
-- experimental / undocumented AppleSPU hid path
-- requires sudo
-- may break on future macos updates
-- use at your own risk
+- undocumented Apple SPU sensor path
+- may break on future macOS releases
+- requires root privileges
 - not for medical use
 
-## tested on
+## tested
 
-- macbook pro m3 pro, macos 15.6.1
-- python 3.14
-- swift 6.2.4 (build verified on apple silicon)
-
-
-## known incompatible
-
-- intel macs (no spu)
-- m1 macbook pro (2020)
-- mac studio m4 max 
-
+- Apple Silicon build verified with Swift 6.2.4
 
 ## license
 
 MIT
-
----
-
-not affiliated with Apple or any employer
