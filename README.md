@@ -7,13 +7,31 @@ this project reads both via iokit hid, along with lid angle and ambient light se
 
 ![demo](https://raw.githubusercontent.com/olvvier/apple-silicon-accelerometer/main/assets/demo.gif)
 
-## try it
+## quick start
+
+### python dashboard
 
     git clone https://github.com/olvvier/apple-silicon-accelerometer
     cd apple-silicon-accelerometer
     python3 -m venv .venv && source .venv/bin/activate
     pip install -e .[demo]
     sudo .venv/bin/python3 motion_live.py
+
+### swift cli
+
+    git clone https://github.com/olvvier/apple-silicon-accelerometer
+    cd apple-silicon-accelerometer
+    cd swift-port
+    swift build -c release
+    sudo .build/release/macimu-cli --duration 10
+
+### swift live dashboard
+
+    git clone https://github.com/olvvier/apple-silicon-accelerometer
+    cd apple-silicon-accelerometer
+    cd swift-port
+    swift build -c release
+    sudo .build/release/macimu-motion-live
 
 ## what is this
 
@@ -249,6 +267,69 @@ if __name__ == '__main__':
 
 the demo includes vibration detection, orientation gauges, experimental heartbeat (bcg), lid angle, ambient light, and optional keyboard flash
 
+## swift package
+
+the repo now also includes a native swift port for apple silicon macs.
+it talks to `AppleSPUHIDDevice` directly through iokit hid instead of reproducing the python shared-memory worker design.
+the swift project lives in the `swift-port/` subfolder.
+
+build the swift targets with:
+
+    cd swift-port
+    swift build
+
+or build optimized binaries with:
+
+    cd swift-port
+    swift build -c release
+
+### swift cli
+
+simple live accel / gyro / orientation output:
+
+    cd swift-port
+    sudo swift run macimu-cli --duration 10
+
+release binary:
+
+    cd swift-port
+    sudo .build/release/macimu-cli --duration 10
+
+useful flags:
+
+    cd swift-port
+    sudo swift run macimu-cli --sample-rate 200
+    sudo swift run macimu-cli --als --lid
+    sudo swift run macimu-cli --no-orientation
+
+### swift motion dashboard
+
+full terminal dashboard port of `motion_live.py`:
+
+    cd swift-port
+    sudo swift run macimu-motion-live
+
+release binary:
+
+    cd swift-port
+    sudo .build/release/macimu-motion-live
+
+useful flags:
+
+    cd swift-port
+    sudo swift run macimu-motion-live --no-kbpulse
+    sudo swift run macimu-motion-live --duration 20
+    sudo swift run macimu-motion-live --sample-rate 100
+    sudo swift run macimu-motion-live --kbpulse-bin /path/to/KBPulse
+
+current swift coverage:
+
+- accel + gyro streaming from `AppleSPUHIDDevice`
+- ambient light + lid-angle parsing
+- Mahony AHRS orientation fusion
+- filter helpers (`magnitude`, `lowPass`, `highPass`, `bandPass`, `removeGravity`)
+- live terminal dashboard with waveform, axes, heartbeat, events, ALS, lid angle, and optional KBPulse output
+
 ### keyboard flash mode (bundled KBPulse)
 
 `motion_live.py` can flash the keyboard backlight from vibration intensity in near realtime.
@@ -272,6 +353,10 @@ If you have `uv`/`uvx` installed, you can also just
 ## code structure
 
 - macimu/ - python package (`pip install macimu`): high-level IMU class + low-level iokit bindings, shared memory ring buffers
+- swift-port/Sources/MacIMU/ - native Swift port: macOS IOKit HID reader, orientation math, and filter helpers
+- swift-port/Sources/macimu-cli/ - Swift CLI for live accel/gyro/orientation output
+- swift-port/Sources/macimu-motion-live/ - Swift terminal dashboard port of `motion_live.py`
+- swift-port/Package.swift - Swift Package Manager manifest
 - motion_live.py - demo app: vibration detection, heartbeat bcg, terminal ui
 - KBPulse/ - vendored keyboard backlight driver code + binary (`KBPulse/bin/KBPulse`)
 
@@ -294,6 +379,7 @@ the bcg bandpass is 0.8-3hz and bpm is estimated via autocorrelation on the filt
 
 - macbook pro m3 pro, macos 15.6.1
 - python 3.14
+- swift 6.2.4 (build verified on apple silicon)
 
 
 ## known incompatible
